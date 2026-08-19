@@ -87,15 +87,3 @@ mc-agent/
 MIT
 
 Built with Node.js, Mineflayer, and LM Studio
-```
-
----
-
-## What to Commit
-
-```bash
-git add README.md
-git commit -m "docs: update README"
-
-git push
-```
