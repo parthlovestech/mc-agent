@@ -7,15 +7,11 @@ const OpenAI = require('openai');
 console.log('[DEBUG] Starting bot...');
 console.log('[DEBUG] Using LM Studio local server at http://localhost:1234');
 
-// CONFIGURATION - LM Studio Local Server
-
-// Initialize LM Studio client (OpenAI-compatible)
 const local = new OpenAI({
     apiKey: 'not-needed',
     baseURL: 'http://localhost:1234/v1',
 });
 
-// Define the Tools (Action Space) for the LLM
 const mineflayerTools = [
     {
         type: "function",
@@ -25,13 +21,13 @@ const mineflayerTools = [
             parameters: {
                 type: "object",
                 properties: {
-                    blockName: { 
-                        type: "string", 
-                        description: "The strict Minecraft block name (e.g., 'oak_log', 'dirt', 'sand')." 
+                    blockName: {
+                        type: "string",
+                        description: "The strict Minecraft block name (e.g., 'oak_log', 'dirt', 'sand')."
                     },
-                    reasoning: { 
-                        type: "string", 
-                        description: "A short sentence explaining to the user why you are mining this." 
+                    reasoning: {
+                        type: "string",
+                        description: "A short sentence explaining to the user why you are mining this."
                     }
                 },
                 required: ["blockName", "reasoning"]
@@ -46,13 +42,13 @@ const mineflayerTools = [
             parameters: {
                 type: "object",
                 properties: {
-                    playerName: { 
-                        type: "string", 
-                        description: "The name of the player to walk to." 
+                    playerName: {
+                        type: "string",
+                        description: "The name of the player to walk to."
                     },
-                    reasoning: { 
-                        type: "string", 
-                        description: "A short sentence explaining why you are walking to them." 
+                    reasoning: {
+                        type: "string",
+                        description: "A short sentence explaining why you are walking to them."
                     }
                 },
                 required: ["playerName", "reasoning"]
@@ -67,9 +63,9 @@ const mineflayerTools = [
             parameters: {
                 type: "object",
                 properties: {
-                    reasoning: { 
-                        type: "string", 
-                        description: "Explain how you achieved the goal." 
+                    reasoning: {
+                        type: "string",
+                        description: "Explain how you achieved the goal."
                     }
                 },
                 required: ["reasoning"]
@@ -95,14 +91,12 @@ bot.loadPlugin(collectBlock);
 bot.once('spawn', () => {
     console.log(`[System] ${bot.username} has spawned!`);
     bot.chat("My AI brain is online! Tell me 'goal <something>' and I'll try to achieve it!");
-    
+
     const mcData = require('minecraft-data')(bot.version);
     const defaultMove = new Movements(bot, mcData);
     defaultMove.allowFreeClear = false;
     bot.pathfinder.setMovements(defaultMove);
 });
-
-// PERCEPTION
 
 function observeEnvironment() {
     const health = Math.round(bot.health);
@@ -143,8 +137,6 @@ function observeEnvironment() {
     };
 }
 
-// ACTIONS
-
 async function moveToPlayer(playerName) {
     let target = null;
     const exactMatch = bot.players[playerName];
@@ -158,14 +150,14 @@ async function moveToPlayer(playerName) {
             }
         }
     }
-    
+
     if (!target) {
         return `Error: Cannot see player ${playerName}.`;
     }
 
     bot.chat(`Pathfinding to ${playerName}...`);
     const p = target.position;
-    
+
     try {
         await bot.pathfinder.goto(new goals.GoalNear(p.x, p.y, p.z, 1));
         return `Successfully reached ${playerName}.`;
@@ -177,7 +169,7 @@ async function moveToPlayer(playerName) {
 async function gatherBlock(blockName) {
     const mcData = require('minecraft-data')(bot.version);
     const blockType = mcData.blocksByName[blockName];
-    
+
     if (!blockType) return `Error: Unknown block name '${blockName}'.`;
 
     const block = bot.findBlock({
@@ -196,24 +188,49 @@ async function gatherBlock(blockName) {
     }
 }
 
-// LLM Execution
-
 async function executeAgentStep(goal) {
     const state = observeEnvironment();
     const playerName = Object.keys(bot.players).filter(p => p !== bot.username)[0] || 'Player';
-    
+
+    const goalNeedsItems = goal.toLowerCase().includes('mine') ||
+                           goal.toLowerCase().includes('gather') ||
+                           goal.toLowerCase().includes('get') ||
+                           goal.toLowerCase().includes('collect');
+
+    if (goalNeedsItems) {
+        const inventoryItems = state.inventory;
+        const hasItems = inventoryItems !== "empty" && Object.keys(inventoryItems).length > 0;
+
+        if (hasItems) {
+            let totalItems = 0;
+            for (const key in inventoryItems) {
+                if (key !== "empty") {
+                    totalItems += inventoryItems[key];
+                }
+            }
+
+            const goalNumberMatch = goal.match(/\d+/);
+            const needed = goalNumberMatch ? parseInt(goalNumberMatch[0]) : 1;
+
+            if (totalItems >= needed) {
+                bot.chat(`I have ${totalItems} items. Task complete!`);
+                return "DONE";
+            }
+        }
+    }
+
     const systemPrompt = `
 You are an autonomous Minecraft agent.
 
 YOUR ULTIMATE GOAL: "${goal}"
 
-=== CURRENT WORLD STATE ===
+CURRENT WORLD STATE:
 ${JSON.stringify(state, null, 2)}
 
-=== YOUR RECENT ACTIONS ===
+YOUR RECENT ACTIONS:
 ${JSON.stringify(memoryBuffer, null, 2)}
 
-=== INSTRUCTIONS ===
+INSTRUCTIONS:
 1. Look at your inventory. See what you have collected.
 2. Look at your position.
 3. Decide the single most logical NEXT action.
@@ -225,7 +242,7 @@ Now, decide your next action.`;
 
     try {
         console.log(`[Agent] Thinking...`);
-        
+
         const response = await local.chat.completions.create({
             model: "local-model",
             messages: [
@@ -238,7 +255,7 @@ Now, decide your next action.`;
         });
 
         const message = response.choices[0].message;
-        
+
         if (!message.tool_calls || message.tool_calls.length === 0) {
             bot.chat("I got confused. Let me rethink.");
             return "RETRY";
@@ -257,24 +274,24 @@ Now, decide your next action.`;
             const checkState = observeEnvironment();
             const inventoryItems = checkState.inventory;
             const isEmpty = inventoryItems === "empty" || Object.keys(inventoryItems).length === 0;
-            
-            const needsItems = goal.toLowerCase().includes('gather') || 
+
+            const needsItems = goal.toLowerCase().includes('gather') ||
                               goal.toLowerCase().includes('mine') ||
                               goal.toLowerCase().includes('get');
-            
+
             if (needsItems && isEmpty) {
-                bot.chat("⚠️ My inventory is empty! I need to gather first.");
+                bot.chat("My inventory is empty! I need to gather first.");
                 return "RETRY";
             }
-            
-            bot.chat("✅ Task complete!");
+
+            bot.chat("Task complete!");
             return "DONE";
         }
 
         let actionResult = "";
         if (actionName === "gatherBlock") {
             actionResult = await gatherBlock(args.blockName);
-        } 
+        }
         else if (actionName === "moveToPlayer") {
             actionResult = await moveToPlayer(args.playerName);
         }
@@ -286,7 +303,7 @@ Now, decide your next action.`;
             arguments: args,
             result: actionResult
         });
-        
+
         if (memoryBuffer.length > 3) memoryBuffer.shift();
 
         return actionResult;
@@ -297,26 +314,19 @@ Now, decide your next action.`;
     }
 }
 
-// =====================================================================
-// CHAT HANDLER WITH AUTONOMOUS LOOP
-// =====================================================================
-
 let isWorking = false;
 
 bot.on('chat', async (username, message) => {
     if (username === bot.username) return;
 
-    // Observe command
     if (message === 'observe') {
         const state = observeEnvironment();
-        console.log("\n=== CURRENT WORLD STATE ===");
+        console.log("CURRENT WORLD STATE:");
         console.log(JSON.stringify(state, null, 2));
-        console.log("===========================\n");
         bot.chat("State logged to terminal.");
         return;
     }
 
-    // AI Goal Command
     if (message.startsWith('goal ')) {
         if (isWorking) {
             bot.chat("I'm busy with another task!");
@@ -325,18 +335,18 @@ bot.on('chat', async (username, message) => {
 
         const goal = message.replace('goal ', '');
         bot.chat(`Starting: "${goal}"`);
-        
+
         isWorking = true;
         memoryBuffer = [];
-        
+
         let stepCount = 0;
         const maxSteps = 10;
         let status = "IN_PROGRESS";
 
         while (stepCount < maxSteps && status !== "DONE") {
             stepCount++;
-            console.log(`\n=== AUTONOMOUS LOOP ${stepCount}/${maxSteps} ===`);
-            
+            console.log(`Autonomous Loop ${stepCount}/${maxSteps}`);
+
             status = await executeAgentStep(goal);
 
             if (status === "DONE") {
@@ -350,19 +360,18 @@ bot.on('chat', async (username, message) => {
         if (status !== "DONE") {
             bot.chat(`I reached the ${maxSteps} step limit.`);
         }
-        
+
         isWorking = false;
         return;
     }
 
-    // Manual commands (for testing without AI)
     if (message === 'come') {
         const result = await moveToPlayer(username);
         console.log(`[Action Result] ${result}`);
         bot.chat(result);
         return;
     }
-    
+
     if (message.startsWith('mine ')) {
         const blockName = message.split(' ')[1];
         const result = await gatherBlock(blockName);
