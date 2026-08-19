@@ -76,6 +76,14 @@ const mineflayerTools = [
 
 let memoryBuffer = [];
 
+function parseGoalTarget(goal) {
+    const match = goal.match(/(\d+)\s+([a-z_]+)/i);
+    if (match) {
+        return { quantity: parseInt(match[1]), block: match[2] };
+    }
+    return null;
+}
+
 const botConfig = {
     host: 'localhost',
     port: 25565,
@@ -114,7 +122,7 @@ function observeEnvironment() {
         }
     }
 
-    const radius = 8;
+    const radius = 3;
     const nearbyBlocks = new Set();
     const ignoreBlocks = ['air', 'cave_air', 'water', 'bedrock', 'tall_grass', 'short_grass'];
 
@@ -188,41 +196,27 @@ async function gatherBlock(blockName) {
     }
 }
 
-async function executeAgentStep(goal) {
+async function executeAgentStep(goal, target) {
     const state = observeEnvironment();
     const playerName = Object.keys(bot.players).filter(p => p !== bot.username)[0] || 'Player';
 
-    const goalNeedsItems = goal.toLowerCase().includes('mine') ||
-                           goal.toLowerCase().includes('gather') ||
-                           goal.toLowerCase().includes('get') ||
-                           goal.toLowerCase().includes('collect');
-
-    if (goalNeedsItems) {
-        const inventoryItems = state.inventory;
-        const hasItems = inventoryItems !== "empty" && Object.keys(inventoryItems).length > 0;
-
-        if (hasItems) {
-            let totalItems = 0;
-            for (const key in inventoryItems) {
-                if (key !== "empty") {
-                    totalItems += inventoryItems[key];
-                }
-            }
-
-            const goalNumberMatch = goal.match(/\d+/);
-            const needed = goalNumberMatch ? parseInt(goalNumberMatch[0]) : 1;
-
-            if (totalItems >= needed) {
-                bot.chat(`I have ${totalItems} items. Task complete!`);
-                return "DONE";
-            }
+    if (target) {
+        const have = state.inventory[target.block] || 0;
+        if (have >= target.quantity) {
+            bot.chat(`Goal satisfied: have ${have}/${target.quantity} ${target.block}.`);
+            return "DONE";
         }
     }
+
+    const goalProgress = target
+        ? `You need ${target.quantity} ${target.block}. You currently have ${state.inventory[target.block] || 0}.`
+        : `No explicit quantity was given. Use your judgment on when the goal is met.`;
 
     const systemPrompt = `
 You are an autonomous Minecraft agent.
 
 YOUR ULTIMATE GOAL: "${goal}"
+GOAL PROGRESS: ${goalProgress}
 
 CURRENT WORLD STATE:
 ${JSON.stringify(state, null, 2)}
@@ -231,10 +225,9 @@ YOUR RECENT ACTIONS:
 ${JSON.stringify(memoryBuffer, null, 2)}
 
 INSTRUCTIONS:
-1. Look at your inventory. See what you have collected.
-2. Look at your position.
-3. Decide the single most logical NEXT action.
-4. You MUST choose one of: gatherBlock, moveToPlayer, or finishTask.
+1. If GOAL PROGRESS shows you already have enough, call finishTask immediately.
+2. Do NOT repeat an action that already succeeded if it already satisfied the goal.
+3. Otherwise decide the single most logical NEXT action: gatherBlock, moveToPlayer, or finishTask.
 
 IMPORTANT: The player's name is "${playerName}". Use this exact name for moveToPlayer.
 
@@ -321,9 +314,18 @@ bot.on('chat', async (username, message) => {
 
     if (message === 'observe') {
         const state = observeEnvironment();
-        console.log("CURRENT WORLD STATE:");
-        console.log(JSON.stringify(state, null, 2));
-        bot.chat("State logged to terminal.");
+        console.log("=== CURRENT WORLD STATE ===");
+        console.log("Health:", state.vitals.health);
+        console.log("Food:", state.vitals.food);
+        console.log("Position:", state.position);
+        console.log("Inventory:", state.inventory);
+        console.log("Nearby blocks:", state.nearby_blocks.join(', ') || 'No notable blocks found');
+        console.log("=============================");
+        
+        const blockList = state.nearby_blocks.length > 0 
+            ? `I see: ${state.nearby_blocks.join(', ')}` 
+            : "I don't see any notable blocks nearby.";
+        bot.chat(blockList);
         return;
     }
 
@@ -334,6 +336,7 @@ bot.on('chat', async (username, message) => {
         }
 
         const goal = message.replace('goal ', '');
+        const target = parseGoalTarget(goal);
         bot.chat(`Starting: "${goal}"`);
 
         isWorking = true;
@@ -347,7 +350,7 @@ bot.on('chat', async (username, message) => {
             stepCount++;
             console.log(`Autonomous Loop ${stepCount}/${maxSteps}`);
 
-            status = await executeAgentStep(goal);
+            status = await executeAgentStep(goal, target);
 
             if (status === "DONE") {
                 bot.chat("Task complete!");
